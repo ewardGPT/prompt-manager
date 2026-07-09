@@ -223,24 +223,100 @@ def promote(
 def validate(
     name: str = typer.Argument(..., help="Prompt name to validate"),
     env: str = typer.Option("staging", "--env", "-e", help="Environment to validate"),
+    run_eval: bool = typer.Option(
+        False, "--run", help="Actually execute eval-harness (requires evalh CLI)"
+    ),
 ):
-    """Validate a prompt against its configured eval suite (delegates to eval-harness)."""
+    """Validate a prompt: template check + optional eval-harness gate."""
     entry = _get_store().get(name)
-    if not entry.eval_suite:
-        console.print("[yellow]No eval suite configured for this prompt.[/]")
-        console.print("Set one with: prompt-manager config --eval-suite <suite_name>")
-        return
-
     version = entry.current_version(env)
     if not version:
         console.print(f"[red]✗[/] No version in {env}.")
         raise typer.Exit(1)
 
-    console.print(f"[bold]Validation required for:[/] {entry.eval_suite}")
-    console.print(f"[dim]Prompt: {name}@{env}={version}[/]")
-    console.print()
-    console.print("[yellow]Run manually:[/] `evalh run --suite {entry.eval_suite}`")
-    console.print("[dim]Eval harness integration coming in v0.2.0[/]")
+    pv = entry.get_version(version)
+    if not pv:
+        console.print(f"[red]✗[/] Version '{version}' not found in history.")
+        raise typer.Exit(1)
+
+    # Template validation
+    result = pv.validate_templates()
+    if result["missing"]:
+        console.print(f"[red]✗ Missing template variables: {', '.join(result['missing'])}[/red]")
+    if result["unused"]:
+        console.print(
+            f"[yellow]⚠ Unused template variables: {', '.join(result['unused'])}[/yellow]"
+        )
+    if result["ok"]:
+        console.print("[green]✓ Template variables are valid[/green]")
+    else:
+        console.print()
+
+    # Eval-harness gate
+    if not entry.eval_suite:
+        console.print("[yellow]No eval suite configured.[/]")
+        console.print("Set one with: prompt-manager config --eval-suite <suite_name>")
+        return
+
+    console.print(f"[bold]Eval suite:[/] {entry.eval_suite}")
+
+    if not run_eval:
+        console.print("[dim]Run with --run to execute eval-harness validation[/]")
+        return
+
+    # Actually run evalh
+    import subprocess
+
+    console.print(f"[bold]Running:[/] evalh run --suite {entry.eval_suite}")
+    try:
+        proc = subprocess.run(
+            ["evalh", "run", "--suite", entry.eval_suite],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if proc.returncode == 0:
+            console.print(f"[green]✓[/] Eval gate passed for [bold]{name}@{env}={version}[/]")
+            if proc.stdout.strip():
+                console.print(proc.stdout)
+        else:
+            console.print(f"[red]✗[/] Eval gate FAILED (exit {proc.returncode})[/]")
+            if proc.stderr:
+                console.print(f"[red]{proc.stderr}[/]")
+            raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print("[red]✗[/] evalh CLI not found. Install eval-harness first.[/]")
+        raise typer.Exit(1) from None
+
+
+@app.command(name="tpl")
+def tpl_check(
+    name: str = typer.Argument(..., help="Prompt name"),
+    env: str = typer.Option("staging", "--env", "-e", help="Environment to check"),
+):
+    """Validate template variables only — no eval-harness."""
+    entry = _get_store().get(name)
+    version = entry.current_version(env)
+    if not version:
+        console.print(f"[red]✗[/] No version in {env}.")
+        raise typer.Exit(1)
+
+    pv = entry.get_version(version)
+    if not pv:
+        console.print("[red]✗[/] Version not found.")
+        raise typer.Exit(1)
+
+    result = pv.validate_templates()
+    console.print(f"[bold]Template check: {name}@{env}={version}[/]")
+
+    if result["ok"]:
+        console.print("[green]✓ All template variables declared and used[/green]")
+    else:
+        if result["missing"]:
+            console.print(f"[red]✗ Missing in template_vars: {result['missing']}[/red]")
+        if result["unused"]:
+            console.print(f"[yellow]⚠ Declared but not in content: {result['unused']}[/yellow]")
+        raise typer.Exit(1)
 
 
 # ── A/B Test ───────────────────────────────────────────────────────────────────

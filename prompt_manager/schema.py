@@ -41,6 +41,22 @@ class PromptVersion(BaseModel):
         self.hash = sha256(self.content.encode()).hexdigest()[:12]
         return self.hash
 
+    def validate_templates(self) -> dict[str, list[str]]:
+        """Validate template variables against prompt content.
+
+        Returns:
+            dict with 'missing' (vars in content but not in template_vars),
+            'unused' (vars in template_vars but not in content), and 'ok' (all good).
+            Empty lists mean no issues.
+        """
+        import re
+
+        found = set(re.findall(r"\{\{?\s*(\w+)\s*\}?\}", self.content))
+        declared = set(self.template_vars.keys())
+        missing = sorted(found - declared)
+        unused = sorted(declared - found)
+        return {"missing": missing, "unused": unused, "ok": not missing and not unused}
+
     def model_post_init(self, __context) -> None:
         if not self.hash:
             self.compute_hash()
