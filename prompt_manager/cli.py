@@ -396,13 +396,114 @@ def config(
     eval_suite: str | None = typer.Option(
         None, "--eval-suite", help="Eval suite for gate validation"
     ),
+    contract_file: str | None = typer.Option(
+        None, "--contract", help="Path to agent-catalog contract YAML to import eval suite from"
+    ),
 ):
     """Configure prompt settings."""
     entry = _get_store().get(name)
+
+    if contract_file:
+        raw = __import__("yaml").safe_load(Path(contract_file).read_text())
+        suites = raw.get("suites", [])
+        if suites:
+            entry.eval_suite = suites[0]
+            console.print(f"[green]✓[/] Imported eval suite from contract: [bold]{suites[0]}[/]")
+            if len(suites) > 1:
+                console.print(f"[dim]  Also available: {', '.join(suites[1:])}[/]")
+        else:
+            console.print("[yellow]No suites found in contract file.[/]")
+
     if eval_suite:
         entry.eval_suite = eval_suite
+
     _get_store().put(entry)
     console.print(f"[green]✓[/] Updated config for [bold]{name}[/]")
+
+
+@app.command(name="status")
+def status_cmd(
+    name: str = typer.Argument(..., help="Prompt name"),
+):
+    """Show full status: environments, AB tests, template health."""
+    entry = _get_store().get(name)
+
+    console.print(f"[bold]Status: {name}[/]")
+
+    # Environments
+    console.print("[bold]Environments:[/]")
+    for env, ver in sorted(entry.environments.items()):
+        pv = entry.get_version(ver)
+        health = ""
+        if pv:
+            tpl = pv.validate_templates()
+            if tpl["ok"]:
+                health = "[green]✓[/]"
+            else:
+                issues = []
+                if tpl["missing"]:
+                    issues.append(f"missing: {tpl['missing']}")
+                if tpl["unused"]:
+                    issues.append(f"unused: {tpl['unused']}")
+                health = f"[red]✗ {', '.join(issues)}[/]"
+        console.print(f"  {env}: [cyan]{ver}[/] ({pv.hash[:8] if pv else '?'}) {health}")
+
+    # A/B tests
+    running_tests = [t for t in entry.ab_tests if t.status.value == "running"]
+    if running_tests:
+        console.print("[bold]Active A/B Tests:[/]")
+        for t in running_tests:
+            weights = ", ".join(f"{v.version}:{v.weight * 100:.0f}%" for v in t.variants)
+            console.print(f"  {t.id}: {weights} (control: {t.control_version})")
+    else:
+        console.print("[bold]A/B Tests:[/] [dim]none active[/]")
+
+    # Eval gate
+    if entry.eval_suite:
+        console.print(f"[bold]Eval Suite:[/] [cyan]{entry.eval_suite}[/]")
+    else:
+        console.print("[bold]Eval Suite:[/] [dim]not configured[/]")
+
+    # Version count
+    console.print(f"[bold]Version History:[/] {len(entry.versions)} versions")
+
+
+@app.command()
+def env_diff(
+    name: str = typer.Argument(..., help="Prompt name"),
+    env1: str = typer.Option("staging", "--env1", help="First environment"),
+    env2: str = typer.Option("production", "--env2", help="Second environment"),
+):
+    """Diff prompt content between two environments."""
+    entry = _get_store().get(name)
+    v1 = entry.current_version(env1)
+    v2 = entry.current_version(env2)
+
+    if not v1 or not v2:
+        console.print(f"[red]✗[/] Missing version in {env1 if not v1 else env2}.")
+        raise typer.Exit(1)
+
+    pv1 = entry.get_version(v1)
+    pv2 = entry.get_version(v2)
+
+    if pv1.content == pv2.content:
+        console.print(f"[green]✓[/] {env1}={v1} and {env2}={v2} are identical")
+        return
+
+    console.print(f"[bold]Diff: {env1}={v1} ↔ {env2}={v2}[/]")
+    lines1 = pv1.content.splitlines()
+    lines2 = pv2.content.splitlines()
+
+    for l1, l2 in zip(lines1, lines2, strict=False):
+        if l1 != l2:
+            console.print(f"[red]- {l1}[/]")
+            console.print(f"[green]+ {l2}[/]")
+    if len(lines1) > len(lines2):
+        for line in lines1[len(lines2) :]:
+            console.print(f"[red]- {line}[/]")
+    elif len(lines2) > len(lines1):
+        for line in lines2[len(lines1) :]:
+            console.print(f"[green]+ {line}[/]")
 
 
 def main() -> None:
