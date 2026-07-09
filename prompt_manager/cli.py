@@ -506,6 +506,55 @@ def env_diff(
             console.print(f"[green]+ {line}[/]")
 
 
+canary_app = typer.Typer(help="Canary deployment with auto-decide", no_args_is_help=True)
+app.add_typer(canary_app, name="canary")
+
+
+@canary_app.command("deploy")
+def canary_deploy_cmd(
+    name: str = typer.Argument(..., help="Prompt name"),
+    version: str = typer.Option(..., "--version", "-v", help="Canary version to deploy"),
+    control: str = typer.Option(..., "--control", "-c", help="Control version"),
+    weight: float = typer.Option(10.0, "--weight", "-w", help="Canary traffic percentage (0-100)"),
+):
+    """Start a canary deployment of a prompt version."""
+    from prompt_manager.canary import canary_deploy
+
+    state = canary_deploy(_get_store(), name, version, control, weight / 100)
+    console.print(
+        f"[green]✓[/] Canary started: {state.canary_version} @ {state.weight * 100:.0f}% traffic"
+    )
+    console.print(f"  Control: {state.control_version} @ {(1 - state.weight) * 100:.0f}% traffic")
+    console.print(f"  Run: prompt-manager canary decide {name}")
+
+
+@canary_app.command("decide")
+def canary_decide_cmd(
+    name: str = typer.Argument(..., help="Prompt name"),
+    metric: str = typer.Option(
+        "error_rate < 0.05", "--metric", "-m", help="Alert condition for canary health"
+    ),
+    checks: int = typer.Option(3, "--checks", "-n", help="Number of health checks to pass"),
+    interval: float = typer.Option(60.0, "--interval", "-i", help="Seconds between checks"),
+):
+    """Auto-decide: monitor telemetry and promote or rollback."""
+    from prompt_manager.canary import canary_decide
+
+    console.print(f"[bold]Monitoring {name}... ({checks} checks, {interval}s intervals)[/]")
+    result = canary_decide(_get_store(), name, metric, checks, interval)
+
+    if result["decision"] == "promoted":
+        console.print(
+            f"[green]✓[/] PROMOTED {result['version']} (confidence: {result['confidence']:.0%})"
+        )
+    elif result["decision"] == "rolled_back":
+        console.print(
+            f"[red]✗[/] ROLLED BACK {result['version']} — {result.get('reason', 'checks failed')}"
+        )
+    else:
+        console.print(f"[yellow]{result['decision']}: {result.get('reason', 'unknown')}[/]")
+
+
 def main() -> None:
     app()
 
