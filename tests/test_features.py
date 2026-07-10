@@ -8,7 +8,6 @@ import pytest
 
 from prompt_manager.canary import CanaryState, canary_deploy
 from prompt_manager.schema import (
-    PromptEntry,
     PromptVersion,
 )
 from prompt_manager.storage import PromptStore
@@ -78,7 +77,7 @@ class TestTemplateValidation:
 
 class TestConfig:
     def test_config_importable(self):
-        from prompt_manager.config import load_config, get
+        from prompt_manager.config import get, load_config
 
         c = load_config()
         assert "prompt_dir" in c

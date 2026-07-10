@@ -182,10 +182,7 @@ def _next_version(store: PromptStore, name: str) -> str:
     except (KeyError, FileNotFoundError):
         existing = []
 
-    nums = []
-    for v in existing:
-        if v.startswith("v") and v[1:].isdigit():
-            nums.append(int(v[1:]))
+    nums = [int(v[1:]) for v in existing if v.startswith("v") and v[1:].isdigit()]
     return f"v{max(nums) + 1}" if nums else "v1"
 
 
